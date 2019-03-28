@@ -257,13 +257,15 @@ export async function initialize({
             handlerName,
             isDebug: args.isDebug,
             onWillAttachDebugger: async () => {
-                if (process.platform === 'darwin') {
-                    await new Promise<void>(resolve => { // delay to avoid consistent early failures
-                        // tslint:disable-next-line:max-line-length
-                        logger.debug(`pythonCodeLensProvider.initialize on ${process.platform}. Allowing time for ptvsd startup......`)
-                        setTimeout(resolve, 4000)
-                    })
-                }
+                // TODO : CC : Try eliminating the need for this delay
+                // if (process.platform === 'darwin') {
+                //     await new Promise<void>(resolve => { // delay to avoid consistent early failures
+                //         // tslint:disable-next-line:max-line-length
+                // tslint:disable-next-line:max-line-length
+                //         logger.debug(`pythonCodeLensProvider.initialize on ${process.platform}. Allowing time for ptvsd startup......`)
+                //         setTimeout(resolve, 4000)
+                //     })
+                // }
             },
             runtime,
             telemetryService
