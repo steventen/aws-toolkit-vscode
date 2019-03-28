@@ -170,7 +170,7 @@ export class SamCliLocalInvokeInvocation {
 
             const debuggerAttachCues: string[] = [
                 'waiting for debugger to attach',
-                'inside runtime container',
+                // 'inside runtime container',
             ]
 
             invoker.invoke({

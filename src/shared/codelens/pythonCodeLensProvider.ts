@@ -121,12 +121,14 @@ const makeLambdaDebugFile = async (params: {
 # SPDX-License-Identifier: Apache-2.0
 
 import ptvsd
+import sys
 from ${handlerFilePrefix} import ${handlerFunctionName} as _handler
 
 
 def ${debugHandlerFunctionName}(event, context):
-    print('waiting for debugger to attach...')
     ptvsd.enable_attach(address=('0.0.0.0', ${params.debugPort}), redirect_output=True)
+    print('waiting for debugger to attach...')
+    sys.stdout.flush()
     ptvsd.wait_for_attach()
     print('debugger attached')
     return _handler(event, context)
