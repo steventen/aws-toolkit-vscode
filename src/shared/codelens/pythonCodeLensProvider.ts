@@ -256,15 +256,16 @@ export async function initialize({
             originalHandlerName: args.handlerName,
             handlerName,
             isDebug: args.isDebug,
-            onWillAttachDebugger: async () => {
-                if (process.platform === 'darwin') {
-                    await new Promise<void>(resolve => { // delay to avoid consistent early failures
-                        // tslint:disable-next-line:max-line-length
-                        logger.debug(`pythonCodeLensProvider.initialize on ${process.platform}. Allowing time for ptvsd startup......`)
-                        setTimeout(resolve, 4000)
-                    })
-                }
-            },
+            // onWillAttachDebugger: async () => {
+            //     if (process.platform === 'darwin') {
+            //         await new Promise<void>(resolve => { // delay to avoid consistent early failures
+            //             // tslint:disable-next-line:max-line-length
+            //             logger.debug(`pythonCodeLensProvider.initialize on
+            //             ${process.platform}. Allowing time for ptvsd startup......`)
+            //             setTimeout(resolve, 4000)
+            //         })
+            //     }
+            // },
             runtime,
             telemetryService
         })

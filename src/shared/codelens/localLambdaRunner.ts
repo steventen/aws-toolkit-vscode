@@ -480,7 +480,6 @@ export const invokeLambdaFunction = async (params: {
         invoker: params.samTaskInvoker
     })
 
-    const startInvokeTime = new Date()
     await command.execute()
 
     if (params.isDebug) {
@@ -497,7 +496,6 @@ export const invokeLambdaFunction = async (params: {
             channeLogger: params.channelLogger,
             debugConfig: params.debugConfig,
             telemetryService: params.telemetryService,
-            startInvokeMillis: startInvokeTime.getTime(),
             runtime: params.runtime,
         })
     }
@@ -536,9 +534,9 @@ export async function attachDebugger(params: {
     channeLogger: ChannelLogger,
     debugConfig: DebugConfiguration,
     telemetryService: TelemetryService,
-    startInvokeMillis: number,
     runtime: string,
 }): Promise<{ success: boolean }> {
+    const startInvokeMillis = new Date().getTime()
     const channelLogger = params.channeLogger
     const logger = params.channeLogger.logger
     logger.debug(`localLambdaRunner.attachDebugger: startDebugging with debugConfig: ${JSON.stringify(
@@ -549,9 +547,8 @@ export async function attachDebugger(params: {
 
     let isDebuggerAttached: boolean | undefined = false
     let numAttempts = 0
-    let retryDelay = 1000
+    const retryDelay = 1000
     let shouldRetry = false
-    const retryEnabled = false // Change this to enable retry
     do {
         channelLogger.info(
             'AWS.output.sam.local.attaching',
@@ -560,26 +557,20 @@ export async function attachDebugger(params: {
         )
         isDebuggerAttached = await vscode.debug.startDebugging(undefined, params.debugConfig)
         numAttempts += 1
-        if (isDebuggerAttached === undefined) {
-            isDebuggerAttached = false
+        if (!isDebuggerAttached) {
             shouldRetry = numAttempts < MAX_DEBUGGER_ATTEMPTS
-        } else if (!isDebuggerAttached) {
-            retryDelay *= 2
-
-            shouldRetry = retryEnabled && (numAttempts < MAX_DEBUGGER_ATTEMPTS)
             if (shouldRetry) {
-                const currTime = new Date()
                 recordDebugAttachResult({
                     telemetryService: params.telemetryService,
                     attachResult: isDebuggerAttached,
                     attempts: numAttempts,
-                    duration: currTime.getTime() - params.startInvokeMillis,
+                    duration: new Date().getTime() - startInvokeMillis,
                     runtime: params.runtime,
                 })
 
                 channelLogger.info(
                     'AWS.output.sam.local.attach.retry',
-                    'Will try to attach debugger again in {0} seconds...',
+                    'Attach failed. Will try to attach debugger again in {0} seconds...',
                     String(retryDelay / 1000)
                 )
 
@@ -595,7 +586,7 @@ export async function attachDebugger(params: {
         telemetryService: params.telemetryService,
         attachResult: isDebuggerAttached,
         attempts: numAttempts,
-        duration: new Date().getTime() - params.startInvokeMillis,
+        duration: new Date().getTime() - startInvokeMillis,
         runtime: params.runtime,
     })
 
