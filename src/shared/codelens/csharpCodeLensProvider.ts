@@ -5,9 +5,15 @@
 
 'use strict'
 
+import * as crossSpawn from 'cross-spawn'
+import * as del from 'del'
+import * as fs from 'fs'
 import * as path from 'path'
+import * as util from 'util'
 import * as vscode from 'vscode'
 
+import { makeCSharpDebugConfiguration } from '../../lambda/local/debugConfiguration'
+import { CloudFormation } from '../cloudformation/cloudformation'
 import { LambdaHandlerCandidate } from '../lambdaHandlerSearch'
 import { getLogger } from '../logger'
 import {
@@ -20,21 +26,28 @@ import { Datum } from '../telemetry/telemetryEvent'
 import { TelemetryService } from '../telemetry/telemetryService'
 import { registerCommand } from '../telemetry/telemetryUtils'
 import { dirnameWithTrailingSlash } from '../utilities/pathUtils'
-import { getChannelLogger } from '../utilities/vsCodeUtils'
+import { getChannelLogger, getDebugPort } from '../utilities/vsCodeUtils'
 import {
     CodeLensProviderParams,
+    getCodeUri,
     getInvokeCmdKey,
     getMetricDatum,
+    getResourceFromTemplate,
+    getRuntime,
     makeCodeLenses,
 } from './codeLensUtils'
 import {
     executeSamBuild,
-    getRuntimeForLambda,
+    ExecuteSamBuildArguments,
     invokeLambdaFunction,
+    InvokeLambdaFunctionArguments,
     LambdaLocalInvokeParams,
     makeBuildDir,
-    makeInputTemplate
+    makeInputTemplate,
 } from './localLambdaRunner'
+
+const access = util.promisify(fs.access)
+const mkdir = util.promisify(fs.mkdir)
 
 export const CSHARP_LANGUAGE = 'csharp'
 export const CSHARP_ALLFILES: vscode.DocumentFilter[] = [
@@ -97,7 +110,8 @@ async function onLocalInvokeCommand({
     lambdaLocalInvokeParams,
     processInvoker,
     taskInvoker,
-    telemetryService
+    telemetryService,
+    getResource = async _args => await getResourceFromTemplate(_args),
 }: {
     configuration: SettingsConfiguration
     toolkitOutputChannel: vscode.OutputChannel,
@@ -105,58 +119,86 @@ async function onLocalInvokeCommand({
     lambdaLocalInvokeParams: LambdaLocalInvokeParams,
     processInvoker: SamCliProcessInvoker,
     taskInvoker: SamCliTaskInvoker,
-    telemetryService: TelemetryService
+    telemetryService: TelemetryService,
+    getResource?(args: {
+        templatePath: string,
+        handlerName: string
+    }): Promise<CloudFormation.Resource>,
 }): Promise<{ datum: Datum }> {
-
     const channelLogger = getChannelLogger(toolkitOutputChannel)
-    const runtime = await getRuntimeForLambda({
+    const resource = await getResource({
+        templatePath: lambdaLocalInvokeParams.samTemplate.fsPath,
         handlerName: lambdaLocalInvokeParams.handlerName,
+    })
+    const runtime = getRuntime(resource)
+    const codeUri = getCodeUri({
+        resource,
         templatePath: lambdaLocalInvokeParams.samTemplate.fsPath
     })
 
+    const baseBuildDir = await makeBuildDir()
+    const codeDir = path.dirname(lambdaLocalInvokeParams.document.uri.fsPath)
+    const documentUri = lambdaLocalInvokeParams.document.uri
+    const originalHandlerName = lambdaLocalInvokeParams.handlerName
+
+    const inputTemplatePath = await makeInputTemplate({
+        baseBuildDir,
+        codeDir,
+        documentUri,
+        originalHandlerName,
+        handlerName: originalHandlerName,
+        runtime,
+        workspaceUri: lambdaLocalInvokeParams.workspaceFolder.uri
+    })
+
+    const buildArgs: ExecuteSamBuildArguments = {
+        baseBuildDir,
+        channelLogger,
+        codeDir,
+        inputTemplatePath,
+        samProcessInvoker: processInvoker,
+    }
+    if (lambdaLocalInvokeParams.isDebug) {
+        buildArgs.environmentVariables = {
+            SAM_BUILD_MODE: 'debug'
+        }
+    }
+    const samTemplatePath: string = await executeSamBuild(buildArgs)
+
+    const invokeArgs: InvokeLambdaFunctionArguments = {
+        baseBuildDir,
+        channelLogger,
+        configuration,
+        documentUri,
+        originalHandlerName,
+        handlerName: originalHandlerName,
+        originalSamTemplatePath: inputTemplatePath,
+        samTemplatePath,
+        samTaskInvoker: taskInvoker,
+        telemetryService,
+        runtime,
+        isDebug: lambdaLocalInvokeParams.isDebug
+    }
+
     if (!lambdaLocalInvokeParams.isDebug) {
-        const baseBuildDir = await makeBuildDir()
-        const codeDir = path.dirname(lambdaLocalInvokeParams.document.uri.fsPath)
-        const documentUri = lambdaLocalInvokeParams.document.uri
-        const originalHandlerName = lambdaLocalInvokeParams.handlerName
-
-        const inputTemplatePath = await makeInputTemplate({
-            baseBuildDir,
-            codeDir,
-            documentUri,
-            originalHandlerName,
-            handlerName: originalHandlerName,
-            runtime,
-            workspaceUri: lambdaLocalInvokeParams.workspaceFolder.uri
+        await invokeLambdaFunction(invokeArgs)
+    } else {
+        const debuggerPath = await installDebugger({
+            resource,
+            templatePath: lambdaLocalInvokeParams.samTemplate.fsPath
         })
-
-        const samTemplatePath: string = await executeSamBuild({
-            baseBuildDir,
-            channelLogger,
-            codeDir,
-            inputTemplatePath,
-            samProcessInvoker: processInvoker,
+        const port = await getDebugPort()
+        const debugConfig = makeCSharpDebugConfiguration({
+            port,
+            codeUri
         })
 
         await invokeLambdaFunction({
-            baseBuildDir,
-            channelLogger,
-            configuration,
-            documentUri,
-            originalHandlerName,
-            handlerName: originalHandlerName,
-            originalSamTemplatePath: inputTemplatePath,
-            samTemplatePath,
-            samTaskInvoker: taskInvoker,
-            telemetryService,
-            runtime,
-            isDebug: lambdaLocalInvokeParams.isDebug,
-
-            // TODO: Set on debug
-            debugConfig: undefined,
+            ...invokeArgs,
+            debugConfig,
+            debugPort: port,
+            debuggerPath
         })
-    } else {
-        vscode.window.showInformationMessage(`Local debug for ${runtime} is currently not implemented.`)
     }
 
     return getMetricDatum({
@@ -335,4 +377,71 @@ export function isPublicMethodSymbol(
 
 export function generateDotNetLambdaHandler(components: DotNetLambdaHandlerComponents): string {
     return `${components.assembly}::${components.namespace}.${components.class}::${components.method}`
+}
+
+export async function installDebugger({
+    templatePath,
+    resource
+}: {
+    templatePath: string
+    resource: Pick<CloudFormation.Resource, 'Properties'>
+}): Promise<string> {
+    const runtime = getRuntime(resource)
+    const codeUri = getCodeUri({ resource, templatePath })
+    const vsdbgPath = path.resolve(codeUri, '.vsdbg')
+
+    try {
+        await access(vsdbgPath)
+
+        // vsdbg is already installed.
+        return vsdbgPath
+    } catch {
+        // We could not access vsdbgPath. Swallow error and continue.
+    }
+
+    const stdoutChunks: string[] = []
+    const stderrChunks: string[] = []
+    try {
+        await mkdir(vsdbgPath)
+
+        const process = crossSpawn(
+            'docker',
+            [
+                'run',
+                '--rm',
+                '--mount',
+                `type=bind,src=${vsdbgPath},dst=/vsdbg`,
+                '--entrypoint',
+                'bash',
+                `lambci/lambda:${runtime}`,
+                '-c',
+                '"curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l /vsdbg"'
+            ],
+            {
+                windowsVerbatimArguments: true
+            }
+        )
+
+        await new Promise<void>((resolve, reject) => {
+            process.stdout.on('data', (data: { toString(): string }) => {
+                stdoutChunks.push(data.toString())
+            })
+            process.stderr.on('data', (data: { toString(): string }) => {
+                stderrChunks.push(data.toString())
+            })
+            process.once('close', (code, signal) => {
+                if (code === 0) {
+                    resolve()
+                } else {
+                    reject(signal)
+                }
+            })
+        })
+    } catch (err) {
+        // Clean up to avoid leaving a bad installation in the user's workspace.
+        await del(vsdbgPath, { force: true })
+        throw err
+    }
+
+    return vsdbgPath
 }
