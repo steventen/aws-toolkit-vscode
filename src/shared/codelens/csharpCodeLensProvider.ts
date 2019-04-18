@@ -399,8 +399,6 @@ export async function installDebugger({
         // We could not access vsdbgPath. Swallow error and continue.
     }
 
-    const stdoutChunks: string[] = []
-    const stderrChunks: string[] = []
     try {
         await mkdir(vsdbgPath)
 
@@ -423,12 +421,6 @@ export async function installDebugger({
         )
 
         await new Promise<void>((resolve, reject) => {
-            process.stdout.on('data', (data: { toString(): string }) => {
-                stdoutChunks.push(data.toString())
-            })
-            process.stderr.on('data', (data: { toString(): string }) => {
-                stderrChunks.push(data.toString())
-            })
             process.once('close', (code, signal) => {
                 if (code === 0) {
                     resolve()
