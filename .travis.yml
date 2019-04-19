@@ -5,6 +5,7 @@ node_js:
 
 matrix:
   include:
+    - os: windows
     - os: linux
     - os: osx
 
